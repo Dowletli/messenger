@@ -1,0 +1,443 @@
+// Messenger Database Schema - Enhanced Authentication
+// Use DBML to define your database structure
+// Docs: https://dbml.dbdiagram.io/docs
+
+Project messenger {
+  database_type: 'PostgreSQL'
+  Note: 'Messenger application database - Enhanced authentication and security'
+}
+
+// ============================================================================
+// ENHANCED USER & AUTHENTICATION TABLES
+// ============================================================================
+
+Table users {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  username varchar(50) [unique, not null]
+  email varchar(255) [unique, not null]
+  phone varchar(20) [unique]
+  display_name varchar(100)
+  avatar_url text
+  bio text
+  status varchar(20) [default: 'offline', note: 'online, offline, away, busy']
+  last_seen_at timestamptz
+  
+  // Enhanced security fields
+  email_verified boolean [default: false]
+  phone_verified boolean [default: false]
+  two_factor_enabled boolean [default: false]
+  account_locked boolean [default: false]
+  locked_until timestamptz [note: 'Temporary lock after failed attempts']
+  locked_reason text [note: 'Why account was locked']
+  
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  deleted_at timestamptz
+  
+  indexes {
+    username
+    email
+    phone
+    (deleted_at) [where: 'deleted_at IS NULL']
+    (email_verified, phone_verified)
+  }
+  
+  Note: 'Core user accounts - passwords stored separately for security'
+}
+
+Table user_credentials {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, unique, ref: - users.id]
+  password_hash varchar(255) [not null, note: 'bcrypt/argon2 hash']
+  password_salt varchar(255) [note: 'If not using built-in salt']
+  password_changed_at timestamptz [default: `now()`]
+  password_history jsonb [note: 'Store hashes of last N passwords to prevent reuse']
+  must_change_password boolean [default: false]
+  
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  
+  Note: 'Separate table for sensitive credential data - enhanced security'
+}
+
+Table user_sessions {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  session_token varchar(255) [unique, not null, note: 'Hashed session identifier']
+  refresh_token varchar(255) [unique, note: 'For token refresh flow']
+  device_id varchar(255) [note: 'Unique device identifier']
+  device_name varchar(100) [note: 'User-friendly device name']
+  device_type varchar(50) [note: 'mobile, desktop, web, tablet']
+  ip_address inet
+  user_agent text
+  location_country varchar(2) [note: 'ISO country code']
+  location_city varchar(100)
+  
+  // Session lifecycle
+  created_at timestamptz [default: `now()`]
+  last_activity_at timestamptz [default: `now()`]
+  expires_at timestamptz [not null]
+  revoked_at timestamptz
+  revoked_reason varchar(50) [note: 'user_logout, admin_action, suspicious_activity, expired']
+  
+  indexes {
+    user_id
+    session_token
+    refresh_token
+    device_id
+    (user_id, revoked_at) [where: 'revoked_at IS NULL', name: 'active_sessions']
+    expires_at
+  }
+  
+  Note: 'Track all user sessions with device and location info'
+}
+
+Table two_factor_auth {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, unique, ref: - users.id]
+  method varchar(20) [not null, note: 'totp, sms, email, backup_codes']
+  secret_key varchar(255) [note: 'Encrypted TOTP secret']
+  backup_codes jsonb [note: 'Hashed one-time backup codes']
+  phone_number varchar(20) [note: 'For SMS 2FA']
+  email varchar(255) [note: 'For email 2FA']
+  enabled boolean [default: true]
+  verified boolean [default: false]
+  
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  last_used_at timestamptz
+  
+  indexes {
+    user_id
+    method
+  }
+  
+  Note: 'Two-factor authentication settings and secrets'
+}
+
+Table verification_tokens {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  token_hash varchar(255) [unique, not null, note: 'Hashed token for security']
+  token_type varchar(50) [not null, note: 'email_verification, phone_verification, password_reset, magic_link']
+  delivery_method varchar(20) [note: 'email, sms']
+  delivery_address varchar(255) [note: 'Where token was sent']
+  
+  // Token lifecycle
+  created_at timestamptz [default: `now()`]
+  expires_at timestamptz [not null]
+  used_at timestamptz
+  attempts integer [default: 0, note: 'Failed verification attempts']
+  max_attempts integer [default: 3]
+  
+  indexes {
+    token_hash
+    user_id
+    (token_type, expires_at)
+    (expires_at) [where: 'used_at IS NULL']
+  }
+  
+  Note: 'Temporary tokens for email/phone verification and password reset'
+}
+
+Table login_attempts {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [ref: > users.id, note: 'NULL if username/email not found']
+  username_attempted varchar(255) [not null]
+  ip_address inet [not null]
+  user_agent text
+  success boolean [not null]
+  failure_reason varchar(50) [note: 'invalid_password, account_locked, user_not_found, 2fa_failed']
+  attempted_at timestamptz [default: `now()`]
+  
+  indexes {
+    user_id
+    ip_address
+    attempted_at
+    (user_id, attempted_at) [where: 'success = false']
+    (ip_address, attempted_at) [where: 'success = false']
+  }
+  
+  Note: 'Track all login attempts for security monitoring and rate limiting'
+}
+
+Table security_events {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [ref: > users.id]
+  event_type varchar(50) [not null, note: 'password_changed, 2fa_enabled, 2fa_disabled, account_locked, suspicious_login, session_revoked']
+  severity varchar(20) [note: 'low, medium, high, critical']
+  ip_address inet
+  user_agent text
+  metadata jsonb [note: 'Additional event context']
+  notified boolean [default: false, note: 'Whether user was notified']
+  
+  created_at timestamptz [default: `now()`]
+  
+  indexes {
+    user_id
+    event_type
+    severity
+    created_at
+    metadata [type: gin]
+  }
+  
+  Note: 'Audit log for security-related events'
+}
+
+Table oauth_providers {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  provider varchar(50) [not null, note: 'google, facebook, apple, github, microsoft']
+  provider_user_id varchar(255) [not null, note: 'ID from OAuth provider']
+  email varchar(255)
+  access_token text [note: 'Encrypted OAuth access token']
+  refresh_token text [note: 'Encrypted OAuth refresh token']
+  token_expires_at timestamptz
+  profile_data jsonb [note: 'Profile info from provider']
+  
+  linked_at timestamptz [default: `now()`]
+  last_used_at timestamptz
+  revoked_at timestamptz
+  
+  indexes {
+    user_id
+    (provider, provider_user_id) [unique]
+    provider
+  }
+  
+  Note: 'OAuth/Social login integration'
+}
+
+Table api_keys {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  key_hash varchar(255) [unique, not null, note: 'Hashed API key']
+  key_prefix varchar(10) [not null, note: 'First chars for identification']
+  name varchar(100) [not null, note: 'User-defined key name']
+  scopes jsonb [note: 'Permissions/scopes for this key']
+  
+  last_used_at timestamptz
+  last_used_ip inet
+  usage_count bigint [default: 0]
+  rate_limit integer [note: 'Requests per hour']
+  
+  created_at timestamptz [default: `now()`]
+  expires_at timestamptz
+  revoked_at timestamptz
+  
+  indexes {
+    user_id
+    key_hash
+    (user_id, revoked_at) [where: 'revoked_at IS NULL']
+  }
+  
+  Note: 'API keys for programmatic access'
+}
+
+Table trusted_devices {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  device_id varchar(255) [unique, not null]
+  device_name varchar(100)
+  device_type varchar(50)
+  fingerprint_hash varchar(255) [note: 'Browser/device fingerprint']
+  
+  first_seen_at timestamptz [default: `now()`]
+  last_seen_at timestamptz [default: `now()`]
+  trusted_at timestamptz
+  trust_expires_at timestamptz
+  revoked_at timestamptz
+  
+  indexes {
+    user_id
+    device_id
+    (user_id, trusted_at) [where: 'revoked_at IS NULL AND trust_expires_at > now()']
+  }
+  
+  Note: 'Remember trusted devices to skip 2FA'
+}
+
+Table rate_limits {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  identifier varchar(255) [not null, note: 'user_id, ip_address, or api_key']
+  identifier_type varchar(50) [not null, note: 'user, ip, api_key']
+  action varchar(50) [not null, note: 'login, send_message, api_call, password_reset']
+  window_start timestamptz [not null]
+  window_duration interval [not null, note: 'e.g., 1 hour, 1 day']
+  request_count integer [default: 0]
+  max_requests integer [not null]
+  
+  indexes {
+    (identifier, action, window_start) [unique]
+    (identifier_type, action)
+    window_start
+  }
+  
+  Note: 'Rate limiting tracking - consider using Redis for production'
+}
+
+// ============================================================================
+// EXISTING MESSENGER TABLES (unchanged)
+// ============================================================================
+
+Table conversations {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  type varchar(20) [not null, note: 'direct, group, channel']
+  name varchar(100) [note: 'NULL for direct messages']
+  description text
+  avatar_url text
+  created_by uuid [ref: > users.id]
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  archived_at timestamptz
+  deleted_at timestamptz
+  
+  indexes {
+    type
+    created_by
+  }
+  
+  Note: 'Container for all message exchanges - both DMs and groups'
+}
+
+Table conversation_participants {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  conversation_id uuid [not null, ref: > conversations.id]
+  user_id uuid [not null, ref: > users.id]
+  role varchar(20) [default: 'member', note: 'owner, admin, member']
+  joined_at timestamptz [default: `now()`]
+  left_at timestamptz
+  last_read_message_id uuid [ref: > messages.id]
+  notifications_enabled boolean [default: true]
+  muted_until timestamptz
+  
+  indexes {
+    conversation_id
+    user_id
+    (conversation_id, user_id) [unique]
+    (conversation_id, user_id) [where: 'left_at IS NULL', name: 'active_participants']
+  }
+  
+  Note: 'Many-to-many relationship with role-based permissions'
+}
+
+Table messages {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  conversation_id uuid [not null, ref: > conversations.id]
+  sender_id uuid [not null, ref: > users.id]
+  parent_message_id uuid [ref: > messages.id, note: 'For threaded replies']
+  content text
+  message_type varchar(20) [default: 'text', note: 'text, image, video, audio, file, system']
+  metadata jsonb [note: 'Flexible storage for mentions, links, etc.']
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  edited_at timestamptz
+  deleted_at timestamptz
+  
+  indexes {
+    (conversation_id, created_at) [type: btree, name: 'messages_conversation_time']
+    sender_id
+    parent_message_id
+    message_type
+    created_at
+    metadata [type: gin]
+  }
+  
+  Note: 'Core message storage with support for threads and rich metadata'
+}
+
+Table attachments {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  message_id uuid [not null, ref: > messages.id]
+  file_name varchar(255) [not null]
+  file_type varchar(100) [note: 'MIME type']
+  file_size bigint [note: 'Size in bytes']
+  file_url text [not null]
+  thumbnail_url text [note: 'For images/videos']
+  width integer [note: 'For images/videos']
+  height integer
+  duration integer [note: 'For audio/video in seconds']
+  uploaded_at timestamptz [default: `now()`]
+  
+  indexes {
+    message_id
+  }
+  
+  Note: 'Media files and attachments linked to messages'
+}
+
+Table reactions {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  message_id uuid [not null, ref: > messages.id]
+  user_id uuid [not null, ref: > users.id]
+  emoji varchar(50) [not null, note: 'Emoji or custom reaction identifier']
+  created_at timestamptz [default: `now()`]
+  
+  indexes {
+    message_id
+    user_id
+    (message_id, user_id, emoji) [unique]
+  }
+  
+  Note: 'Emoji reactions on messages'
+}
+
+Table message_reads {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  message_id uuid [not null, ref: > messages.id]
+  user_id uuid [not null, ref: > users.id]
+  read_at timestamptz [default: `now()`]
+  
+  indexes {
+    message_id
+    user_id
+    (message_id, user_id) [unique]
+  }
+  
+  Note: 'Track which users have read which messages (read receipts)'
+}
+
+Table typing_indicators {
+  conversation_id uuid [not null, ref: > conversations.id]
+  user_id uuid [not null, ref: > users.id]
+  started_at timestamptz [default: `now()`]
+  
+  indexes {
+    (conversation_id, user_id) [pk]
+  }
+  
+  Note: 'Real-time typing indicators - consider using Redis instead for better performance'
+}
+
+Table contacts {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  contact_user_id uuid [not null, ref: > users.id]
+  nickname varchar(100) [note: 'Custom display name for contact']
+  blocked boolean [default: false]
+  favorite boolean [default: false]
+  created_at timestamptz [default: `now()`]
+  
+  indexes {
+    user_id
+    contact_user_id
+    (user_id, contact_user_id) [unique]
+    (user_id, blocked)
+  }
+  
+  Note: 'User relationships - contacts, blocking, favorites'
+}
+
+Table notification_settings {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, unique, ref: - users.id]
+  push_enabled boolean [default: true]
+  email_enabled boolean [default: true]
+  sound_enabled boolean [default: true]
+  show_previews boolean [default: true]
+  quiet_hours_start time
+  quiet_hours_end time
+  updated_at timestamptz [default: `now()`]
+  
+  Note: 'Per-user notification preferences'
+}

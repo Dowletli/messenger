@@ -1,0 +1,206 @@
+// Messenger Database Schema
+// Use DBML to define your database structure
+// Docs: https://dbml.dbdiagram.io/docs
+
+Project messenger {
+  database_type: 'PostgreSQL'
+  Note: 'Messenger application database - supports direct messages, groups, media, reactions, and threads'
+}
+
+Table users {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  username varchar(50) [unique, not null]
+  email varchar(255) [unique, not null]
+  phone varchar(20) [unique]
+  password_hash varchar(255) [not null]
+  display_name varchar(100)
+  avatar_url text
+  bio text
+  status varchar(20) [default: 'offline', note: 'online, offline, away, busy']
+  last_seen_at timestamptz
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  deleted_at timestamptz
+  
+  indexes {
+    username
+    email
+    deleted_at [where: 'deleted_at IS NULL']
+  }
+  
+  Note: 'Core user accounts and authentication'
+}
+
+Table conversations {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  type varchar(20) [not null, note: 'direct, group, channel']
+  name varchar(100) [note: 'NULL for direct messages']
+  description text
+  avatar_url text
+  created_by uuid [ref: > users.id]
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  archived_at timestamptz
+  deleted_at timestamptz
+  
+  indexes {
+    type
+    created_by
+  }
+  
+  Note: 'Container for all message exchanges - both DMs and groups'
+}
+
+Table conversation_participants {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  conversation_id uuid [not null, ref: > conversations.id]
+  user_id uuid [not null, ref: > users.id]
+  role varchar(20) [default: 'member', note: 'owner, admin, member']
+  joined_at timestamptz [default: `now()`]
+  left_at timestamptz
+  last_read_message_id uuid [ref: > messages.id]
+  notifications_enabled boolean [default: true]
+  muted_until timestamptz
+  
+  indexes {
+    conversation_id
+    user_id
+    (conversation_id, user_id) [unique]
+    (conversation_id, user_id) [where: 'left_at IS NULL', name: 'active_participants']
+  }
+  
+  Note: 'Many-to-many relationship with role-based permissions'
+}
+
+Table messages {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  conversation_id uuid [not null, ref: > conversations.id]
+  sender_id uuid [not null, ref: > users.id]
+  parent_message_id uuid [ref: > messages.id, note: 'For threaded replies']
+  content text
+  message_type varchar(20) [default: 'text', note: 'text, image, video, audio, file, system']
+  metadata jsonb [note: 'Flexible storage for mentions, links, etc.']
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+  edited_at timestamptz
+  deleted_at timestamptz
+  
+  indexes {
+    (conversation_id, created_at) [type: btree, name: 'messages_conversation_time']
+    sender_id
+    parent_message_id
+    message_type
+    created_at
+    metadata [type: gin]
+  }
+  
+  Note: 'Core message storage with support for threads and rich metadata'
+}
+
+Table attachments {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  message_id uuid [not null, ref: > messages.id]
+  file_name varchar(255) [not null]
+  file_type varchar(100) [note: 'MIME type']
+  file_size bigint [note: 'Size in bytes']
+  file_url text [not null]
+  thumbnail_url text [note: 'For images/videos']
+  width integer [note: 'For images/videos']
+  height integer
+  duration integer [note: 'For audio/video in seconds']
+  uploaded_at timestamptz [default: `now()`]
+  
+  indexes {
+    message_id
+  }
+  
+  Note: 'Media files and attachments linked to messages'
+}
+
+Table reactions {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  message_id uuid [not null, ref: > messages.id]
+  user_id uuid [not null, ref: > users.id]
+  emoji varchar(50) [not null, note: 'Emoji or custom reaction identifier']
+  created_at timestamptz [default: `now()`]
+  
+  indexes {
+    message_id
+    user_id
+    (message_id, user_id, emoji) [unique]
+  }
+  
+  Note: 'Emoji reactions on messages'
+}
+
+Table message_reads {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  message_id uuid [not null, ref: > messages.id]
+  user_id uuid [not null, ref: > users.id]
+  read_at timestamptz [default: `now()`]
+  
+  indexes {
+    message_id
+    user_id
+    (message_id, user_id) [unique]
+  }
+  
+  Note: 'Track which users have read which messages (read receipts)'
+}
+
+Table typing_indicators {
+  conversation_id uuid [not null, ref: > conversations.id]
+  user_id uuid [not null, ref: > users.id]
+  started_at timestamptz [default: `now()`]
+  
+  indexes {
+    (conversation_id, user_id) [pk]
+  }
+  
+  Note: 'Real-time typing indicators - consider using Redis instead for better performance'
+}
+
+Table contacts {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, ref: > users.id]
+  contact_user_id uuid [not null, ref: > users.id]
+  nickname varchar(100) [note: 'Custom display name for contact']
+  blocked boolean [default: false]
+  favorite boolean [default: false]
+  created_at timestamptz [default: `now()`]
+  
+  indexes {
+    user_id
+    contact_user_id
+    (user_id, contact_user_id) [unique]
+    (user_id, blocked)
+  }
+  
+  Note: 'User relationships - contacts, blocking, favorites'
+}
+
+Table notification_settings {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  user_id uuid [not null, unique, ref: - users.id]
+  push_enabled boolean [default: true]
+  email_enabled boolean [default: true]
+  sound_enabled boolean [default: true]
+  show_previews boolean [default: true]
+  quiet_hours_start time
+  quiet_hours_end time
+  updated_at timestamptz [default: `now()`]
+  
+  Note: 'Per-user notification preferences'
+}
+
+// Relationships are defined inline with ref syntax above
+// Key relationships:
+// - conversations.created_by > users.id (who created the conversation)
+// - conversation_participants connects users to conversations (many-to-many)
+// - messages.sender_id > users.id (who sent the message)
+// - messages.conversation_id > conversations.id (which conversation)
+// - messages.parent_message_id > messages.id (threaded replies, self-referencing)
+// - attachments.message_id > messages.id (media files)
+// - reactions.message_id > messages.id and reactions.user_id > users.id
+// - message_reads tracks read receipts
+// - contacts creates user-to-user relationships (self-referencing through users table)

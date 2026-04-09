@@ -1,0 +1,156 @@
+// Module Architecture Diagram for dbdiagram.io
+// This shows the modular boundaries and their relationships
+
+Project messenger_modules {
+  Note: 'Modular Monolith Architecture - 6 bounded contexts'
+}
+
+// ==============================================
+// MODULE 1: USER MANAGEMENT
+// ==============================================
+Table "User_Module.users" {
+  id uuid [pk]
+  username varchar
+  email varchar
+  password_hash varchar
+  display_name varchar
+  avatar_url text
+  status varchar
+  last_seen_at timestamptz
+  created_at timestamptz
+  
+  Note: 'MODULE: User Management | OWNS: Authentication, Profiles, Status'
+}
+
+Table "User_Module.notification_settings" {
+  id uuid [pk]
+  user_id uuid [ref: - User_Module.users.id]
+  push_enabled boolean
+  email_enabled boolean
+  sound_enabled boolean
+  
+  Note: 'MODULE: User Management'
+}
+
+// ==============================================
+// MODULE 2: CONTACTS
+// ==============================================
+Table "Contacts_Module.contacts" {
+  id uuid [pk]
+  user_id uuid [note: 'FK to User_Module.users (cross-module)']
+  contact_user_id uuid [note: 'FK to User_Module.users (cross-module)']
+  nickname varchar
+  blocked boolean
+  favorite boolean
+  created_at timestamptz
+  
+  Note: 'MODULE: Contacts | OWNS: Relationships, Blocking, Favorites'
+}
+
+// ==============================================
+// MODULE 3: CONVERSATION
+// ==============================================
+Table "Conversation_Module.conversations" {
+  id uuid [pk]
+  type varchar
+  name varchar
+  description text
+  avatar_url text
+  created_by uuid [note: 'FK to User_Module.users (cross-module)']
+  created_at timestamptz
+  updated_at timestamptz
+  
+  Note: 'MODULE: Conversation | OWNS: Conversation Lifecycle, Permissions'
+}
+
+Table "Conversation_Module.conversation_participants" {
+  id uuid [pk]
+  conversation_id uuid [ref: > Conversation_Module.conversations.id]
+  user_id uuid [note: 'FK to User_Module.users (cross-module)']
+  role varchar
+  joined_at timestamptz
+  left_at timestamptz
+  last_read_message_id uuid [note: 'FK to Messaging_Module.messages (cross-module)']
+  notifications_enabled boolean
+  muted_until timestamptz
+  
+  Note: 'MODULE: Conversation | Many-to-many: Users ↔ Conversations'
+}
+
+Table "Conversation_Module.typing_indicators" {
+  conversation_id uuid [ref: > Conversation_Module.conversations.id]
+  user_id uuid [note: 'FK to User_Module.users (cross-module)']
+  started_at timestamptz
+  
+  Note: 'MODULE: Conversation | Real-time typing status'
+}
+
+// ==============================================
+// MODULE 4: MESSAGING
+// ==============================================
+Table "Messaging_Module.messages" {
+  id uuid [pk]
+  conversation_id uuid [note: 'FK to Conversation_Module.conversations (cross-module)']
+  sender_id uuid [note: 'FK to User_Module.users (cross-module)']
+  parent_message_id uuid [ref: > Messaging_Module.messages.id]
+  content text
+  message_type varchar
+  metadata jsonb
+  created_at timestamptz
+  updated_at timestamptz
+  edited_at timestamptz
+  deleted_at timestamptz
+  
+  Note: 'MODULE: Messaging | OWNS: Message Content, Threading, Metadata'
+}
+
+// ==============================================
+// MODULE 5: MEDIA
+// ==============================================
+Table "Media_Module.attachments" {
+  id uuid [pk]
+  message_id uuid [note: 'FK to Messaging_Module.messages (cross-module)']
+  file_name varchar
+  file_type varchar
+  file_size bigint
+  file_url text
+  thumbnail_url text
+  width integer
+  height integer
+  duration integer
+  uploaded_at timestamptz
+  
+  Note: 'MODULE: Media | OWNS: File Uploads, CDN Integration, Thumbnails'
+}
+
+// ==============================================
+// MODULE 6: ENGAGEMENT
+// ==============================================
+Table "Engagement_Module.reactions" {
+  id uuid [pk]
+  message_id uuid [note: 'FK to Messaging_Module.messages (cross-module)']
+  user_id uuid [note: 'FK to User_Module.users (cross-module)']
+  emoji varchar
+  created_at timestamptz
+  
+  Note: 'MODULE: Engagement | OWNS: Reactions'
+}
+
+Table "Engagement_Module.message_reads" {
+  id uuid [pk]
+  message_id uuid [note: 'FK to Messaging_Module.messages (cross-module)']
+  user_id uuid [note: 'FK to User_Module.users (cross-module)']
+  read_at timestamptz
+  
+  Note: 'MODULE: Engagement | OWNS: Read Receipts, Seen Status'
+}
+
+// ==============================================
+// MODULE BOUNDARIES (Visual Grouping)
+// ==============================================
+
+// Note: In dbdiagram.io, tables prefixed with "Module_Name." 
+// will visually group together showing clear module boundaries
+
+// Cross-module references are intentionally NOT using ref syntax
+// to show that modules communicate through APIs, not direct FK constraints
