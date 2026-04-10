@@ -1,16 +1,16 @@
+import path from "path";
 import { Sequelize } from "sequelize";
 
-export const sequelize = new Sequelize(
-    process.env.DB_NAME as string,
-    process.env.DB_USER as string,
-    process.env.DB_PASS,
-    {
-        host: process.env.DB_HOST || 'localhost',
-        port: Number(process.env.DB_PORT) || 5432,
-        dialect: "postgres",
-        logging: false,
-    }
-);
+export const sequelize = new Sequelize({
+    dialect: 'postgres',
+    database: process.env.DB_NAME,
+    username: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT) || 5432,
+    logging: false,
+    models: [path.join(__dirname, '../modules/*/models/*.model.ts')],
+});
 
 export const connectDB = async () => {
     try {
